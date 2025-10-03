@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Tráfico en el Puente de Guayaquil — 4 carriles</title>
+  <style>
+    body {
+      margin: 0;
+      background: #87ceeb;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+    #stats {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 14px;
+    }
+    #control {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(255,255,255,0.95);
+      color: #000;
+      padding: 15px;
+      border-radius: 10px;
+      font-size: 14px;
+      width: 220px;
+      transition: all 0.3s ease;
+    }
+    #control h3 { margin: 0 0 10px; font-size: 16px; text-align: center; }
+    #control button { margin: 5px 0; padding: 8px; width: 100%; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+    #control button.red { background: #e53935; color: #fff; }
+    #control button.green { background: #43a047; color: #fff; }
+    #control button.reset { background: #1e88e5; color: #fff; }
+    #control input { width: 100%; margin-top: 5px; padding: 5px; }
+    #togglePanel {
+      position: absolute;
+      top: 10px;
+      right: 250px;
+      background: #444;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+
+  <div id="stats">
+    <p>⏱ Tiempo de tráfico: <span id="tiempo">0</span> seg</p>
+    <p>🌫 CO₂ generado: <span id="co2">0</span> g</p>
+    <p>🚦 Semáforo: <span id="estado">Rojo</span></p>
+  </div>
+
+  <div id="control">
+    <h3>Panel de Control</h3>
+    <label for="numCarros">Cantidad de vehículos:</label>
+    <input type="number" id="numCarros" value="12" min="1" max="80">
+    <button onclick="aplicarCarros()">Aplicar</button>
+    <hr>
+    <button class="red" onclick="cambiarSemaforo('rojo')">Rojo</button>
+    <button class="green" onclick="cambiarSemaforo('verde')">Verde</button>
+    <hr>
+    <button class="reset" onclick="reiniciar()">Reiniciar</button>
+  </div>
+  <div id="togglePanel" onclick="toggleControl()">⮜ Panel</div>
+
+<audio id="miAudio" loop preload="auto">
+  <source src="tt.mp3" type="audio/mpeg">
+</audio>
+
+  <canvas id="canvas"></canvas>
+
+  <script>
+    const audio = document.getElementById("miAudio");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      puenteY = canvas.height / 2 - carrilAltura * 2;
+    }
+    window.addEventListener("resize", resize);
+
+    let tiempo = 0;
+    let co2 = 0;
+    let vehiculos = [];
+    let semaforo = "rojo";
+
+    // Config puente
+    const carrilAltura = 40;
+    let puenteY = window.innerHeight / 2 - carrilAltura * 2;
+
+    // Vegetación flotando
+    let vegetacion = [];
+    class Rama {
+      constructor() {
+        this.x = Math.random() * canvas.width;
+        this.y = puenteY + carrilAltura*4 + 50 + Math.random()*50;
+        this.size = 10 + Math.random()*20;
+        this.velocidad = 1 + Math.random()*1.5;
+      }
+      mover() {
+        this.x += this.velocidad;
+        if (this.x > canvas.width) {
+          this.x = -this.size;
+          this.y = puenteY + carrilAltura*4 + 50 + Math.random()*50;
+        }
+      }
+      dibujar() {
+        ctx.fillStyle = "green";
+        ctx.beginPath();
+        ctx.ellipse(this.x, this.y, this.size, this.size/2, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    class Vehiculo {
+      constructor(x, y, tipo, direccion) {
+        this.x = x;
+        this.y = y;
+        this.tipo = tipo;
+        this.direccion = direccion; // "derecha" o "izquierda"
+        this.baseVel = 2 + Math.random()*2;
+        this.velocidad = this.baseVel;
+        this.color = Vehiculo.randomColor();
+
+        if (tipo === "auto") { this.ancho = 50; this.alto = 30; this.emision = 0.05; }
+        else if (tipo === "bus") { this.ancho = 80; this.alto = 35; this.emision = 0.1; }
+        else { this.ancho = 100; this.alto = 40; this.emision = 0.15; }
+      }
+
+      static randomColor() {
+        const c = Math.floor(Math.random()*0xffffff).toString(16).padStart(6, "0");
+        return "#" + c;
+      }
+
+      dibujar() {
+        ctx.fillStyle = this.color;
+        ctx.fillRect(this.x, this.y, this.ancho, this.alto);
+      }
+
+      mover(adelante, dt) {
+        let move = this.velocidad * dt * 60;
+
+        // ENTRADAS del puente
+        const entradaIzq = 120;
+        const entradaDer = canvas.width - 120;
+
+        if (this.direccion === "derecha") {
+          if (semaforo === "rojo" && this.x < entradaIzq) move = 0;
+          if (adelante) {
+            const gap = adelante.x - (this.x + this.ancho);
+            if (gap < 10) move = 0;
+          }
+          this.x += move;
+          if (this.x > canvas.width) this.x = -this.ancho;
+        } else {
+          if (semaforo === "rojo" && this.x > entradaDer) move = 0;
+          if (adelante) {
+            const gap = (this.x) - (adelante.x + adelante.ancho);
+            if (gap < 10) move = 0;
+          }
+          this.x -= move;
+          if (this.x + this.ancho < 0) this.x = canvas.width + Math.random()*100;
+        }
+      }
+    }
+
+    function generarVehiculos(cantidad) {
+      vehiculos = [];
+      const tipos = ["auto", "bus", "camion"];
+      const carriles = [
+        { y: puenteY, dir: "derecha" },
+        { y: puenteY + carrilAltura + 10, dir: "derecha" },
+        { y: puenteY + (carrilAltura+10)*2, dir: "izquierda" },
+        { y: puenteY + (carrilAltura+10)*3, dir: "izquierda" }
+      ];
+      for (let i = 0; i < cantidad; i++) {
+        const lane = carriles[i % 4];
+        const x = Math.random() * canvas.width;
+        const tipo = tipos[Math.floor(Math.random()*tipos.length)];
+        vehiculos.push(new Vehiculo(x, lane.y, tipo, lane.dir));
+      }
+    }
+
+    function dibujarPuente() {
+      ctx.fillStyle = "#3fa9f5";
+      ctx.fillRect(0, puenteY + carrilAltura*4 + 20, canvas.width, canvas.height);
+
+      // carretera
+      ctx.fillStyle = "#555";
+      ctx.fillRect(0, puenteY - 20, canvas.width, carrilAltura*4 + 40);
+
+      // líneas blancas separadoras
+      ctx.strokeStyle = "white";
+      ctx.setLineDash([20, 20]);
+      ctx.lineWidth = 2;
+      for (let i = 1; i < 4; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, puenteY + i*(carrilAltura+10) - 5);
+        ctx.lineTo(canvas.width, puenteY + i*(carrilAltura+10) - 5);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // línea amarilla central
+      ctx.strokeStyle = "yellow";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(0, puenteY + (carrilAltura+10)*2 - 10);
+      ctx.lineTo(canvas.width, puenteY + (carrilAltura+10)*2 - 10);
+      ctx.stroke();
+
+      // zonas de espera si semáforo en rojo
+      if (semaforo === "rojo") {
+        ctx.fillStyle = "rgba(255,0,0,0.2)";
+        ctx.fillRect(0, puenteY - 20, 150, carrilAltura*4 + 40); // izquierda
+        ctx.fillRect(canvas.width - 150, puenteY - 20, 150, carrilAltura*4 + 40); // derecha
+      }
+    }
+
+    function dibujarSemaforo() {
+      ctx.fillStyle = "#333";
+      ctx.fillRect(50, puenteY - 120, 60, 120);
+      ctx.beginPath();
+      ctx.arc(80, puenteY - 90, 20, 0, Math.PI * 2);
+      ctx.fillStyle = semaforo === "rojo" ? "red" : "#330000";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(80, puenteY - 40, 20, 0, Math.PI * 2);
+      ctx.fillStyle = semaforo === "verde" ? "lime" : "#003300";
+      ctx.fill();
+    }
+
+    let lastTime = performance.now();
+    function animar(now) {
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      dibujarPuente();
+      dibujarSemaforo();
+      vegetacion.forEach(r => { r.mover(); r.dibujar(); });
+
+      const carriles = [
+        { y: puenteY, dir: "derecha" },
+        { y: puenteY + carrilAltura + 10, dir: "derecha" },
+        { y: puenteY + (carrilAltura+10)*2, dir: "izquierda" },
+        { y: puenteY + (carrilAltura+10)*3, dir: "izquierda" }
+      ];
+      for (let lane of carriles) {
+        let lista = vehiculos.filter(v => v.y === lane.y);
+        lista.sort((a,b) => lane.dir==="derecha" ? b.x - a.x : a.x - b.x);
+        for (let i=0;i<lista.length;i++) {
+          let adelante = i>0 ? lista[i-1] : null;
+          lista[i].mover(adelante, dt);
+          lista[i].dibujar();
+        }
+      }
+      tiempo += dt;
+      vehiculos.forEach(v => co2 += (semaforo==="rojo"?v.emision*2:v.emision)*dt*60);
+      document.getElementById("tiempo").innerText = tiempo.toFixed(1);
+      document.getElementById("co2").innerText = co2.toFixed(1);
+      document.getElementById("estado").innerText = semaforo.charAt(0).toUpperCase()+semaforo.slice(1);
+      requestAnimationFrame(animar);
+    }
+
+    function aplicarCarros() {
+      const cantidad = parseInt(document.getElementById("numCarros").value)||12;
+      generarVehiculos(cantidad);
+      tiempo=0; co2=0;
+    }
+    function cambiarSemaforo(color) {
+  semaforo = color;
+  if (color === "rojo") {
+    audio.play().catch(err => console.log("El navegador bloqueó el autoplay:", err));
+  } else {
+    audio.pause();
+    audio.currentTime = 0; // reinicia el audio
+  }
+}
+
+    function reiniciar() { tiempo=0; co2=0; aplicarCarros(); }
+    function toggleControl() {
+      const panel=document.getElementById("control");
+      if (panel.style.display==="none") { panel.style.display="block"; }
+      else { panel.style.display="none"; }
+    }
+
+    resize();
+    generarVehiculos(12);
+    for (let i=0;i<8;i++) vegetacion.push(new Rama());
+    requestAnimationFrame(animar);
+  </script>
+</body>
+</html>
